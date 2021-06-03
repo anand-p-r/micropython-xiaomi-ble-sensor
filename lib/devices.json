@@ -1,0 +1,21 @@
+[
+    {
+        "name": "<Device 1>", 
+        "mac": "<Device 1 MAC Address without the ':'>", 
+        "sensor_topic": "MQTT topic to publish sensor values, i.e., temp/humidity/battery",
+        "avail_topic": "MQTT topic to publish sensor availability",
+        "average": <No: of sensor values to aggregate and average before publishing to MQTT, .e.g 3>,
+        "timeout": <Not used>,
+        "retain": <Retain MQTT values - 0 or 1>
+    },
+    {
+        "name": "Device 2", 
+        "mac": "Device 2 MAC Address without ':'", 
+        "sensor_topic": "MQTT topic to publish sensor values, i.e., temp/humidity/battery",
+        "avail_topic": "MQTT topic to publish sensor availability",
+        "average": 3,
+        "timeout": 10,
+        "retain": 1
+    }
+]
+

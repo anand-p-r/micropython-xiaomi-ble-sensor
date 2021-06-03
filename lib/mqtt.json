@@ -1,0 +1,7 @@
+{
+    "client": "<BLE client name / Id>", 
+    "host": "<MQTT Broker Host Ip/name>", 
+    "user": "<MQTT Broker User name>",
+    "password": "<MQTT Broker password>",
+    "port": <MQTT Host port>
+}

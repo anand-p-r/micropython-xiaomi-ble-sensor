@@ -3,10 +3,10 @@ Micropython script that runs on a [PyCom GPy](https://docs.pycom.io/) board to p
 
 ## Supported Devices
 [LYWSDCGQ](https://esphome.io/components/sensor/xiaomi_ble.html#lywsdcgq)
-Tested successfully with PyCom GPy Firmware version: ´Pycom MicroPython 1.20.2.r4 [v1.11-ffb0e1c]´
+Tested successfully with PyCom GPy Firmware version: `Pycom MicroPython 1.20.2.r4 [v1.11-ffb0e1c]`
 
 ## Configuration
-0. If needed, format the board with commands at PyCom terminal: (import os; os.fsformat('/flash'))
+0. If needed, format the board with commands at PyCom terminal: (`import os; os.fsformat('/flash')`)
 1. Update lib/wifi.json with the WiFi credentials.
 2. Update lib/mqtt.json with MQTT Broker address, credentials and board diagnostics topic (optional).
 3. Update lib/devices.json with Sensor/Device details.

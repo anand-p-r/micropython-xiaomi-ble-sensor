@@ -1,9 +1,10 @@
-import pycom
 import time
-from network import Bluetooth
-import sys
-from mqtt import MQTTClient
 import ujson
+import machine
+import utime
+from machine import RTC
+from network import Bluetooth
+from mqtt import MQTTClient
 
 
 ## Constants
@@ -11,8 +12,15 @@ hexdigits = "0123456789abcdefABCDEF"
 MAC_MQTT_DICT = {}
 MQTT_CLIENT = None
 LONG_SLEEP = False
-LONG_SLEEP_DUR = (15*60)
+LONG_SLEEP_DUR = (1*60)
 SHORT_SLEEP_DUR = 1
+WEAK_CONN_RETRY_ATT = 2
+ECONNRESET_RETRY_TIMER = 2
+NTP_SYN_WAIT_TIMER = 2
+ADV_LISTEN_WAIT_TIMER = 0.050
+
+BOARD_TELEMETRY_TOPIC = None
+rtc = None
 
 
 ## Class to hold device specific topic and other MQTT details
@@ -70,6 +78,7 @@ def init_mqtt_connection():
     Initialise MQTT client
     '''
     global MQTT_CLIENT
+    global BOARD_TELEMETRY_TOPIC
 
     config_data = {}
     with open("lib/mqtt.json", "r") as fp:
@@ -81,6 +90,9 @@ def init_mqtt_connection():
     port = config_data.get("port", None)
     user = config_data.get("user", None)
     password = config_data.get("password", None)
+    
+    ## Topic for board diagnostics
+    BOARD_TELEMETRY_TOPIC = config_data.get("board_telemetry_topic", None)
 
     try:
         MQTT_CLIENT = MQTTClient(client_id, str(host), user=str(user), password=str(password), port=int(port))
@@ -138,22 +150,32 @@ def time_for_long_sleep():
     return False
 
 
+def get_board_temperature():
+
+    deg_cel = 0.0
+    try:
+        deg_cel = round(((machine.temperature() - 32) * (5/9)), 2)
+    except Exception as e:
+        print("Unable to convert board temperature!")
+
+    return deg_cel
+
 def send_on_mqtt(msgs=None):
 
     if MQTT_CLIENT and msgs:
         for msg in msgs:
             topic = msg.get("topic", None)
-            print(msg)
+            retain = msg.get("retain", True)
             if topic:
                 try:
-                    MQTT_CLIENT.publish(topic=topic, msg=ujson.dumps(msg.get("payload")))
+                    MQTT_CLIENT.publish(topic=topic, msg=ujson.dumps(msg.get("payload")), retain=retain)
                 except Exception as e:
-                    print("Exception - {}".format(e))
+                    print("MQTT Publish Exception - {}".format(e))
+                    raise e
             else:
                 print("No topic defined")
     else:
         print("No MQTT_CLIENT or msg")
-
 
 def get_key(mac):
 
@@ -171,21 +193,6 @@ def get_key(mac):
             count = 0
     
     return reverse_mac
-
-
-def disable_hb_light_dance():
-    pycom.heartbeat(False)
-    print("Dance of lights .....")
-    pycom.rgbled(0xFF0000)  # Red
-    time.sleep(2)
-    pycom.rgbled(0x00FF00)  # Green
-    time.sleep(2)
-    pycom.rgbled(0x0000FF)  # Blue
-    time.sleep(2)
-    pycom.rgbled(0x000000)  # No Colour
-    print("Enough ...disabling heartbeat...")
-    pycom.heartbeat(False)
-    print("Version - {}, Info - {}".format(sys.version, sys.version_info))
 
 
 def get_hex_val(str_with_escape):
@@ -262,7 +269,9 @@ def get_device(mac):
     return None
 
 
-def decode_service_data(data_as_bytes):
+def decode_service_data(data_as_bytes, last_reset_ts=None):
+
+    global rtc
 
     try:
         ## Convert bytes to string
@@ -344,6 +353,7 @@ def decode_service_data(data_as_bytes):
             availability = "offline"
             messages = []
 
+            ## Data payload
             payload = {
                         "temperature": device.get_avg_temp(),
                         "humidity": device.get_avg_rh(),
@@ -356,35 +366,80 @@ def decode_service_data(data_as_bytes):
                 "payload": payload,
                 "retain": bool(int(device.retain))
             }
-
             messages.append(data_dict)
-            availability = "online"
 
+            ## Availability payload. Can be improved to report device avail.
+            availability = "online"
             avail_dict = {
                 "topic": device.avail_topic,
                 "payload": availability,
                 "retain": bool(int(device.retain))
             }
             messages.append(avail_dict)
+
+            ## Board telemetry
+            if BOARD_TELEMETRY_TOPIC is not None:
+                payload = {
+                    "temperature": get_board_temperature(),
+                    "last_reset_ts": last_reset_ts
+                }
+
+                board_temp_dict = {
+                    "topic": BOARD_TELEMETRY_TOPIC,
+                    "payload": payload,
+                    "retain": True
+                }
+
+                messages.append(board_temp_dict)
             
-            try:
-                ## Publish on MQTT
-                send_on_mqtt(messages)
-                print("MQTT sent message - {}".format(messages))
-            except Exception as e:
-                print("MQTT sending exception - {}".format(e))
-            finally:
-                device.mqtt_sent = True
-                device.reset_avg_values()
+            ## For weak connections
+            count_conn = 0
+            while count_conn < WEAK_CONN_RETRY_ATT:
+                try:
+                    ## Publish on MQTT
+                    send_on_mqtt(messages)
+                    print("{}: MQTT sent message - {}".format(rtc.now(), messages))
+                    device.mqtt_sent = True
+                    device.reset_avg_values()
+                    count_conn = 0
+                    break
+                except Exception as e:
+                    print("MQTT sending exception - {}. Retry attempt {}".format(e, count_conn+1))
+                    time.sleep(int(ECONNRESET_RETRY_TIMER))
+                    count_conn += 1
+            
+            ## Reset if conn is still broken
+            if count_conn >= WEAK_CONN_RETRY_ATT:
+                print("Retry attempts exceeded! Will reset the board and retry")
+                machine.reset()
 
     except Exception as e:
         print("Data parsing exception - {}".format(e))
 
 
+def format_ts_to_string(ts_as_list):
+
+    utime.timezone(10800)
+    ts_as_list = utime.localtime()
+    ts_string = "-".join([str(s) for s in ts_as_list[:-2]])
+    return ts_string
+
 
 def main():
+    global rtc
+
+    rtc = RTC()
+    rtc.ntp_sync("pool.ntp.org")
+
+    while not rtc.synced():
+        print("NTP sync not complete! Lets wait for a while!")
+        time.sleep(int(NTP_SYN_WAIT_TIMER))
+
+    print("NTP sync completed!")
+
     init_mqtt_connection()
     init_devices()
+    last_reset_ts = format_ts_to_string(rtc.now())
 
     bt = Bluetooth()
 
@@ -400,6 +455,7 @@ def main():
 
     while True:
         adv = bt.get_adv()
+
         if adv:
             try:
                 # try to get the complete name
@@ -411,14 +467,14 @@ def main():
                 if "MJ_HT_V" in adv_name:
                     data = bt.resolve_adv_data(adv.data, Bluetooth.ADV_SERVICE_DATA)
                     print("Service data: {}".format(data))
-                    decode_service_data(data)
+                    decode_service_data(data, last_reset_ts)
 
                     if time_for_long_sleep():
                         time.sleep(LONG_SLEEP_DUR)
                     else:
                         time.sleep(SHORT_SLEEP_DUR)
         else:
-            time.sleep(0.050)
+            time.sleep(float(ADV_LISTEN_WAIT_TIMER))
 
 
 main()

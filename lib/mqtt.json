@@ -3,5 +3,6 @@
     "host": "<MQTT Broker Host Ip/name>", 
     "user": "<MQTT Broker User name>",
     "password": "<MQTT Broker password>",
-    "port": <MQTT Host port>
+    "port": <MQTT Host port>,
+    "board_telemetry_topic": "<MQTT Topic to report Board Diagnostics>"
 }
